@@ -22,16 +22,18 @@ import com.alibaba.csp.sentinel.dashboard.auth.AuthAction;
 import com.alibaba.csp.sentinel.dashboard.auth.AuthService.PrivilegeType;
 import com.alibaba.csp.sentinel.dashboard.discovery.AppManagement;
 import com.alibaba.csp.sentinel.dashboard.repository.rule.RuleRepository;
+import com.alibaba.csp.sentinel.dashboard.rule.DynamicRuleProvider;
+import com.alibaba.csp.sentinel.dashboard.rule.DynamicRulePublisher;
 import com.alibaba.csp.sentinel.util.StringUtil;
 
 import com.alibaba.csp.sentinel.dashboard.datasource.entity.rule.SystemRuleEntity;
 import com.alibaba.csp.sentinel.dashboard.discovery.MachineInfo;
-import com.alibaba.csp.sentinel.dashboard.client.SentinelApiClient;
 import com.alibaba.csp.sentinel.dashboard.domain.Result;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -48,7 +50,12 @@ public class SystemController {
     @Autowired
     private RuleRepository<SystemRuleEntity, Long> repository;
     @Autowired
-    private SentinelApiClient sentinelApiClient;
+    @Qualifier("systemRuleNacosProvider")
+    private DynamicRuleProvider<List<SystemRuleEntity>> ruleProvider;
+
+    @Autowired
+    @Qualifier("systemRuleNacosPublisher")
+    private DynamicRulePublisher<List<SystemRuleEntity>> rulePublisher;
     @Autowired
     private AppManagement appManagement;
 
@@ -80,7 +87,12 @@ public class SystemController {
             return checkResult;
         }
         try {
-            List<SystemRuleEntity> rules = sentinelApiClient.fetchSystemRuleOfMachine(app, ip, port);
+            List<SystemRuleEntity> rules = ruleProvider.getRules(app);
+            if (rules != null && !rules.isEmpty()) {
+                for (SystemRuleEntity entity : rules) {
+                    entity.setApp(app);
+                }
+            }
             rules = repository.saveAll(rules);
             return Result.ofSuccess(rules);
         } catch (Throwable throwable) {
@@ -251,6 +263,12 @@ public class SystemController {
 
     private boolean publishRules(String app, String ip, Integer port) {
         List<SystemRuleEntity> rules = repository.findAllByMachine(MachineInfo.of(app, ip, port));
-        return sentinelApiClient.setSystemRuleOfMachine(app, ip, port, rules);
+        try {
+            rulePublisher.publish(app, rules);
+            return true;
+        } catch (Exception e) {
+            logger.error("publishRules failed! {}", e.getMessage());
+            return false;
+        }
     }
 }
